@@ -16,7 +16,10 @@ export const prismaAuditRepository: AuditRepository = {
     await prisma.auditLog.create({
       data: {
         ...entry,
-        metadata: entry.metadata ?? undefined,
+        metadata:
+  entry.metadata === undefined
+    ? undefined
+    : JSON.parse(JSON.stringify(entry.metadata)),
       },
     });
   },
