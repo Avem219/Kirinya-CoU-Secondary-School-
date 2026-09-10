@@ -1,0 +1,389 @@
+// Kirinya C.O.U.S.S digital platform — database schema
+// Note: `npx prisma generate` / `migrate` could not be executed in this sandbox
+// (the container's network allowlist does not include binaries.prisma.sh, which
+// Prisma needs to download its query engine). The schema is hand-written and
+// syntactically valid; run `npx prisma generate` and `npx prisma migrate dev`
+// in an environment with normal internet access before first use.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Auth & access ----------
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  EDITOR
+  CONTRIBUTOR
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          Role      @default(CONTRIBUTOR)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  newsArticles     NewsArticle[]
+  events           Event[]
+  auditLogs        AuditLog[]
+  uploadedMedia    MediaAsset[]
+  sessions         Session[]
+
+  @@index([email])
+}
+
+// Server-side session record for cookie-based authentication. Only a SHA-256
+// hash of the session token is stored — the raw token exists only in the
+// user's httpOnly cookie and is never persisted or logged. See
+// src/lib/auth/session.ts.
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String   @unique
+  userAgent   String?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String   // e.g. "content.publish", "user.role_change", "auth.login"
+  resource   String   // e.g. "NewsArticle:clx123"
+  result     String   // "success" | "failure"
+  ipAddress  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum ContentStatus {
+  DRAFT
+  IN_REVIEW
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+// ---------- Site structure & branding ----------
+
+model SiteSetting {
+  id                String   @id @default("singleton")
+  schoolName        String   @default("Kirinya Church of Uganda Secondary School")
+  abbreviation      String   @default("Kirinya C.O.U.S.S")
+  motto             String   @default("Light for Life")
+  logoUrl           String?
+  badgeUrl          String?
+  faviconUrl        String?
+  primaryColor      String?  // CMS-editable; do not hardcode until brand colors are verified with the school
+  secondaryColor    String?
+  accentColor       String?
+  headingFont       String?
+  bodyFont          String?
+  socialPreviewUrl  String?
+  address           String?
+  phonePrimary      String?
+  phoneSecondary    String?
+  email             String?
+  facebookUrl       String?
+  twitterUrl        String?
+  youtubeUrl        String?
+  whatsappNumber    String?
+  applyOnlineUrl    String?  // currently the school's external Google Form
+  mapEmbedUrl       String?
+  updatedAt         DateTime @updatedAt
+}
+
+model NavigationItem {
+  id        String           @id @default(cuid())
+  label     String
+  href      String?
+  order     Int              @default(0)
+  parentId  String?
+  parent    NavigationItem?  @relation("NavChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children  NavigationItem[] @relation("NavChildren")
+  isVisible Boolean          @default(true)
+}
+
+model Page {
+  id            String        @id @default(cuid())
+  slug          String        @unique
+  title         String
+  bodyRichText  String        @db.Text
+  status        ContentStatus @default(DRAFT)
+  seoTitle      String?
+  seoDescription String?
+  ogImageUrl    String?
+  publishedAt   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+// ---------- News ----------
+
+model NewsCategory {
+  id      String        @id @default(cuid())
+  name    String        @unique
+  slug    String        @unique
+  articles NewsArticle[]
+}
+
+model NewsArticle {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  title          String
+  excerpt        String?
+  bodyRichText   String        @db.Text
+  featuredImageId String?
+  featuredImage  MediaAsset?   @relation(fields: [featuredImageId], references: [id], onDelete: SetNull)
+  categoryId     String?
+  category       NewsCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  authorId       String?
+  author         User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  status         ContentStatus @default(DRAFT)
+  isFeatured     Boolean       @default(false)
+  publishedAt    DateTime?
+  scheduledFor   DateTime?
+  seoTitle       String?
+  seoDescription String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([categoryId])
+}
+
+// ---------- Events ----------
+
+model Event {
+  id               String        @id @default(cuid())
+  slug             String        @unique
+  title            String
+  description      String?       @db.Text
+  startTime        DateTime
+  endTime          DateTime?
+  location         String?
+  featuredImageId  String?
+  featuredImage    MediaAsset?   @relation(fields: [featuredImageId], references: [id], onDelete: SetNull)
+  registrationUrl  String?
+  status           ContentStatus @default(DRAFT)
+  createdById      String?
+  createdBy        User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([startTime])
+}
+
+// ---------- Gallery ----------
+
+model GalleryAlbum {
+  id          String         @id @default(cuid())
+  slug        String         @unique
+  title       String
+  description String?
+  coverImageId String?
+  coverImage  MediaAsset?    @relation("AlbumCover", fields: [coverImageId], references: [id], onDelete: SetNull)
+  category    String?
+  isPublished Boolean        @default(false)
+  createdAt   DateTime       @default(now())
+  images      GalleryImage[]
+}
+
+model GalleryImage {
+  id        String        @id @default(cuid())
+  albumId   String
+  album     GalleryAlbum  @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  mediaId   String
+  media     MediaAsset    @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  caption   String?
+  order     Int           @default(0)
+
+  @@index([albumId])
+}
+
+// ---------- Staff & academics ----------
+
+model Department {
+  id       String            @id @default(cuid())
+  name     String            @unique
+  subjects Subject[]
+  staff    StaffMember[]
+}
+
+model StaffMember {
+  id            String      @id @default(cuid())
+  name          String
+  position      String
+  photoId       String?
+  photo         MediaAsset? @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  biography     String?     @db.Text
+  departmentId  String?
+  department    Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  displayOrder  Int         @default(0)
+  email         String?
+  isLeadership  Boolean     @default(false) // true = shown on /leadership, false = general staff/team
+  isPublished   Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model Subject {
+  id           String      @id @default(cuid())
+  name         String
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  level        String?     // e.g. O-Level / A-Level
+  description  String?     @db.Text
+}
+
+model AcademicProgramme {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  level       String?
+  isPublished Boolean  @default(false)
+}
+
+// ---------- Admissions ----------
+
+model AdmissionInformation {
+  id             String   @id @default("singleton")
+  overviewRichText String? @db.Text
+  processRichText  String? @db.Text
+  requirementsRichText String? @db.Text
+  importantDatesRichText String? @db.Text
+  faqRichText      String? @db.Text
+  applyCtaLabel  String?  @default("Apply Online")
+  applyCtaUrl    String?  // mirrors SiteSetting.applyOnlineUrl; kept editable independently
+  updatedAt      DateTime @updatedAt
+}
+
+// ---------- E-Library / resources ----------
+
+model ResourceCategory {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  slug      String     @unique
+  resources Resource[]
+}
+
+enum ResourceType {
+  DOCUMENT
+  PAST_PAPER
+  NOTES
+  EXTERNAL_LINK
+  VIDEO
+  OTHER
+}
+
+model Resource {
+  id              String            @id @default(cuid())
+  title           String
+  description     String?           @db.Text
+  subject         String?
+  level           String?
+  resourceType    ResourceType      @default(DOCUMENT)
+  author          String?
+  year            Int?
+  fileId          String?
+  file            MediaAsset?       @relation("ResourceFile", fields: [fileId], references: [id], onDelete: SetNull)
+  externalUrl     String?
+  thumbnailId     String?
+  thumbnail       MediaAsset?       @relation("ResourceThumbnail", fields: [thumbnailId], references: [id], onDelete: SetNull)
+  categoryId      String?
+  category        ResourceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tags            String[]
+  isFeatured      Boolean           @default(false)
+  isPublished     Boolean           @default(false)
+  dateAdded       DateTime          @default(now())
+
+  @@index([subject])
+  @@index([resourceType])
+}
+
+// ---------- Announcements ----------
+
+enum AnnouncementPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model Announcement {
+  id           String               @id @default(cuid())
+  title        String
+  bodyRichText String               @db.Text
+  category     String?
+  priority     AnnouncementPriority @default(NORMAL)
+  isFeatured   Boolean              @default(false)
+  isPublished  Boolean              @default(false)
+  expiresAt    DateTime?
+  createdAt    DateTime             @default(now())
+}
+
+// ---------- Contact ----------
+
+model ContactMessage {
+  id         String   @id @default(cuid())
+  name       String
+  email      String
+  phone      String?
+  subject    String?
+  message    String   @db.Text
+  isRead     Boolean  @default(false)
+  isArchived Boolean  @default(false)
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([isRead, isArchived])
+}
+
+// ---------- Media ----------
+
+model MediaAsset {
+  id            String   @id @default(cuid())
+  fileName      String
+  url           String
+  mimeType      String
+  sizeBytes     Int
+  width         Int?
+  height        Int?
+  altText       String?
+  caption       String?
+  source        String?  // e.g. "School-provided", "Photographer: ..."
+  licenseNote   String?  // rights/permission status — required before public reuse
+  uploadedById  String?
+  uploadedBy    User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime @default(now())
+
+  newsArticles      NewsArticle[]
+  events            Event[]
+  albumCovers       GalleryAlbum[]  @relation("AlbumCover")
+  galleryImages     GalleryImage[]
+  staffPhotos       StaffMember[]
+  resourceFiles     Resource[]      @relation("ResourceFile")
+  resourceThumbs    Resource[]      @relation("ResourceThumbnail")
+
+  @@index([mimeType])
+}
