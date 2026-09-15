@@ -12,18 +12,17 @@ import { prisma } from "@/lib/prisma";
 import type { AuditRepository, AuditLogEntry } from "@/lib/repositories/types";
 
 export const prismaAuditRepository: AuditRepository = {
-  async record(entry) {
-    await prisma.auditLog.create({
-      data: {
-        ...entry,
-        metadata:
-  entry.metadata === undefined
-    ? undefined
-    : JSON.parse(JSON.stringify(entry.metadata)),
-      },
-    });
-  },
-
+async record(entry) {
+  await prisma.auditLog.create({
+    data: {
+      ...entry,
+      metadata:
+        entry.metadata === undefined
+          ? undefined
+          : JSON.parse(JSON.stringify(entry.metadata)),
+    },
+  });
+},
   async list(limit = 50) {
     const entries = await prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },
